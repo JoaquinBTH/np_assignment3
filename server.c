@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <regex.h>
 #include <pthread.h>
+#include <signal.h>
 
 static int uid = 10;
 
@@ -24,9 +25,23 @@ void printIpAddr(struct sockaddr_in addr)
          addr.sin_port);
 }
 
+void printIp6Addr(struct addrinfo *addr, struct sockaddr_in6 port, char *host)
+{
+  char ipString[40];
+  memset(ipString, 0, 40);
+  inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)addr->ai_addr)->sin6_addr), ipString, addr->ai_addrlen);
+  if(strlen(ipString) == 0)
+  {
+    printf("Client connected from [%s]:%d\n", host, port.sin6_port);
+  }
+  else
+  {
+    printf("Client connected from [%s]:%d\n", ipString, port.sin6_port);
+  }
+}
+
 typedef struct
 {
-  struct sockaddr_in address;
   int clientSock;
   int uid;
   char name[12];
@@ -102,17 +117,19 @@ void sendMessage(char *message, int uid)
 
   for (int i = 0; i < clients.used; i++)
   {
-    if(clients.array[i].uid != uid)
+    if (clients.array[i].uid != uid)
     {
-      if (write(clients.array[i].clientSock, message, message_len) == -1)
+      if (send(clients.array[i].clientSock, message, (size_t)message_len, MSG_NOSIGNAL) == -1)
       {
-        printf("Write failed!\n");
+        printf("Write failed! %s\n", strerror(errno));
         break;
       }
     }
   }
 
   pthread_mutex_unlock(&clients_mutex);
+
+  sleep(1);
 }
 
 void *handle_client(void *arg)
@@ -126,7 +143,7 @@ void *handle_client(void *arg)
 
   clientDetails *currentClient = (clientDetails *)arg;
 
-  //Send Protocol
+  // Send Protocol
   printf("Server protocol: %s", protocol);
   if ((send(currentClient->clientSock, &protocol, strlen(protocol), 0)) == -1)
   {
@@ -136,10 +153,11 @@ void *handle_client(void *arg)
 
   char nickname[50];
   memset(nickname, 0, 50);
-  //Recieve nickname and check if it's good or not
+  // Recieve nickname and check if it's good or not
   if (recv(currentClient->clientSock, &nickname, sizeof(nickname), 0) == -1)
   {
-    printf("Recieve failed!\n");
+    printf("Recieve failed nickname!\n");
+    leave_flag = 1;
   }
   else
   {
@@ -200,7 +218,7 @@ void *handle_client(void *arg)
       {
         printf("Name is allowed\n");
         insertClient(&clients, *currentClient);
-        //Send ok to client
+        // Send ok to client
         memset(okOrError, 0, 20);
         strcpy(okOrError, "OK\n");
         if (send(currentClient->clientSock, okOrError, strlen(okOrError), 0) == -1)
@@ -212,7 +230,7 @@ void *handle_client(void *arg)
       {
         printf("%s is not accepted.\n", currentClient->name);
         leave_flag = 1;
-        //Send no to client
+        // Send no to client
         memset(okOrError, 0, 20);
         strcpy(okOrError, "ERROR\n");
         if (send(currentClient->clientSock, okOrError, strlen(okOrError), 0) == -1)
@@ -225,7 +243,7 @@ void *handle_client(void *arg)
     {
       printf("Name %s too long or already exists.\n", currentClient->name);
       leave_flag = 1;
-      //Send no to client
+      // Send no to client
       memset(okOrError, 0, 20);
       strcpy(okOrError, "ERROR\n");
       if (send(currentClient->clientSock, okOrError, strlen(okOrError), 0) == -1)
@@ -243,85 +261,92 @@ void *handle_client(void *arg)
       break;
     }
     memset(currentClient->message, 0, 255);
-    int recieve = recv(currentClient->clientSock, &currentClient->message, sizeof(currentClient->message), 0);
-    char MSG[5];
-    memset(MSG, 0, 5);
-    strncpy(MSG, currentClient->message, 3);
-
-    if (recieve == -1)
+    if (recv(currentClient->clientSock, &currentClient->message, sizeof(currentClient->message), 0) == -1)
     {
-      printf("Recieve failed\n");
-      leave_flag = 1;
-    }
-    else if ((strcmp(currentClient->message, "exit\n") == 0))
-    {
-      leave_flag = 1;
-    }
-    else if(strcmp(MSG, "MSG") != 0)
-    {
-      leave_flag = 1;
-      memset(okOrError, 0, 20);
-      strcpy(okOrError, "ERROR\n");
-      if(send(currentClient->clientSock, &okOrError, strlen(okOrError), 0) == -1)
-      {
-        printf("Send failed!\n");
-      }
+      printf("Recieve failed message: %s\n", currentClient->message);
+      printf("Error message: %s\n", strerror(errno));
+      break;
     }
     else
     {
-      //Make two implementations to seee which one is the favorable when correcting the assignment
-      //1. Perfectly fine implementation for netcat and the clients where they can send messages back and forth.
+      char MSG[5];
+      memset(MSG, 0, 5);
+      strncpy(MSG, currentClient->message, 3);
 
-      /*
-      char temp[255];
-      memset(temp, 0, 255);
-      memcpy(temp, &currentClient->message[4], sizeof(currentClient->message));
-      memset(currentClient->message, 0, 255);
-      sprintf(currentClient->message, "MSG %s %s", currentClient->name, temp);
-      sendMessage(currentClient->message, currentClient->uid);
-      */
-
-      //2. If the message has more MSG inside of it, restructure the messages to be sent one after another and be accepted by the tests.
-
-      int nrOfNewlines = 0;
-      int posOfNewlines[3] = {0, 0, 0};
-      for(int i = 0; i < sizeof(currentClient->message); i++)
+      if ((strcmp(currentClient->message, "exit\n") == 0))
       {
-        if(currentClient->message[i] == '\n')
+        leave_flag = 1;
+      }
+      else if (strcmp(MSG, "MSG") != 0)
+      {
+        leave_flag = 1;
+        memset(okOrError, 0, 20);
+        strcpy(okOrError, "ERROR\n");
+        if (send(currentClient->clientSock, &okOrError, strlen(okOrError), 0) == -1)
         {
-          posOfNewlines[nrOfNewlines] = i;
-          nrOfNewlines++;
+          printf("Send failed!\n");
         }
       }
-
-      for(int i = 0; i < nrOfNewlines; i++)
+      else
       {
-        if(nrOfNewlines == 1 || i == 0)
+        // Make two implementations to seee which one is the favorable when correcting the assignment
+        // 1. Perfectly fine implementation for netcat and the clients where they can send messages back and forth.
+
+        /*
+        char temp[255];
+        memset(temp, 0, 255);
+        memcpy(temp, &currentClient->message[4], sizeof(currentClient->message));
+        memset(currentClient->message, 0, 255);
+        sprintf(currentClient->message, "MSG %s %s", currentClient->name, temp);
+        sendMessage(currentClient->message, currentClient->uid);
+        */
+
+        // 2. If the message has more MSG inside of it, restructure the messages to be sent one after another and be accepted by the tests.
+
+        int nrOfNewlines = 0;
+        int posOfNewlines[3] = {0, 0, 0};
+        for (int i = 0; i < sizeof(currentClient->message); i++)
         {
-          char temp[255];
-          memset(temp, 0, 255);
-          memcpy(temp, &currentClient->message[4], (size_t)(posOfNewlines[i] - 3));
-          char msg[300];
-          memset(msg, 0, 300);
-          sprintf(msg, "MSG %s %s", currentClient->name, temp);
-          sendMessage(msg, currentClient->uid);
+          if (currentClient->message[i] == '\n')
+          {
+            posOfNewlines[nrOfNewlines] = i;
+            nrOfNewlines++;
+          }
         }
-        else
+
+        for (int i = 0; i < nrOfNewlines; i++)
         {
-          char temp[255];
-          memset(temp, 0, 255);
-          memcpy(temp, &currentClient->message[posOfNewlines[i - 1] + 5], (size_t)(posOfNewlines[i] - posOfNewlines[i - 1] - 4));
-          char msg[300];
-          memset(msg, 0, 300);
-          sprintf(msg, "MSG %s %s", currentClient->name, temp);
-          sendMessage(msg, currentClient->uid);
+          if (nrOfNewlines == 1 || i == 0)
+          {
+            char temp[255];
+            memset(temp, 0, 255);
+            memcpy(temp, &currentClient->message[4], (size_t)(posOfNewlines[i] - 3));
+            char msg[300];
+            memset(msg, 0, 300);
+            sprintf(msg, "MSG %s %s", currentClient->name, temp);
+            sendMessage(msg, currentClient->uid);
+          }
+          else
+          {
+            char temp[255];
+            memset(temp, 0, 255);
+            memcpy(temp, &currentClient->message[posOfNewlines[i - 1] + 5], (size_t)(posOfNewlines[i] - posOfNewlines[i - 1] - 4));
+            char msg[300];
+            memset(msg, 0, 300);
+            sprintf(msg, "MSG %s %s", currentClient->name, temp);
+            sendMessage(msg, currentClient->uid);
+          }
         }
+        memset(currentClient->message, 0, 255);
       }
-      memset(currentClient->message, 0, 255);
     }
   }
-  close(currentClient->clientSock);
+  if (strcmp(strerror(errno), "Success") != 0)
+  {
+    printf("%s UID: %d\n", strerror(errno), currentClient->uid);
+  }
   removeClient(&clients, currentClient->uid);
+  close(currentClient->clientSock);
   free(currentClient);
   pthread_detach(pthread_self());
 
@@ -337,13 +362,53 @@ int main(int argc, char *argv[])
     printf("Usage: %s <ip>:<port> \n", argv[0]);
     exit(1);
   }
+
   /*
-    Read first input, assumes <ip>:<port> syntax, convert into one string (Desthost) and one integer (port). 
-     Atm, works only on dotted notation, i.e. IPv4 and DNS. IPv6 does not work if its using ':'. 
+    Read first input, assumes <ip>:<port> syntax, convert into one string (Desthost) and one integer (port).
   */
-  char delim[] = ":";
-  char *Desthost = strtok(argv[1], delim);
-  char *Destport = strtok(NULL, delim);
+  char *Desthost;
+  char *Destport;
+
+  int IPv6 = 0;
+
+  if (argv[1][0] == '[')
+  {
+    // IPv6
+    IPv6 = 1;
+    char delim[] = "]";
+    char delim2[] = ":";
+    Desthost = strtok(argv[1], delim);
+    Destport = strtok(NULL, delim2);
+    memmove(Desthost, Desthost + 1, strlen(Desthost));
+  }
+  else
+  {
+    // IPv4
+    char delim[] = ":";
+    Desthost = strtok(argv[1], delim);
+    Destport = strtok(NULL, delim);
+
+    // Parse if DNS to see if it's IPv4 or IPv6
+    struct addrinfo hint, *test;
+    memset(&hint, 0, sizeof(hint));
+    hint.ai_family = AF_UNSPEC;
+    hint.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(Desthost, Destport, &hint, &test) == -1)
+    {
+      printf("Failed to get addr info\n");
+    }
+
+    switch (test->ai_family)
+    {
+    case AF_INET:
+      IPv6 = 0;
+      break;
+    case AF_INET6:
+      IPv6 = 1;
+      break;
+    }
+  }
+
   if (Desthost == NULL || Destport == NULL)
   {
     printf("Usage: %s <ip>:<port> \n", argv[0]);
@@ -363,82 +428,169 @@ int main(int argc, char *argv[])
   int serverSock;
   pthread_t tid;
 
-  memset(&hint, 0, sizeof(hint));
-  hint.ai_family = AF_UNSPEC;
-  hint.ai_socktype = SOCK_STREAM;
+  if (IPv6 == 1)
+  {
+    struct sockaddr_in6 ipv6Addr;
+    memset(&ipv6Addr, 0, sizeof(ipv6Addr));
+    ipv6Addr.sin6_family = AF_INET6;
+    ipv6Addr.sin6_port = htons(port);
+    ipv6Addr.sin6_addr = in6addr_any;
 
-  if ((rv = getaddrinfo(Desthost, Destport, &hint, &servinfo)) != 0)
-  {
-    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-    return 1;
-  }
-  for (p = servinfo; p != NULL; p = p->ai_next)
-  {
-    if ((serverSock = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+    memset(&hint, 0, sizeof(hint));
+    hint.ai_family = AF_INET6;
+    hint.ai_socktype = SOCK_STREAM;
+
+    if ((rv = getaddrinfo(Desthost, Destport, &hint, &servinfo)) != 0)
     {
-      printf("Socket creation failed.\n");
-      continue;
+      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+      return 1;
     }
 
-    if (setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
+    for (p = servinfo; p != NULL; p = p->ai_next)
     {
-      perror("setsockopt failed!\n");
+      if ((serverSock = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+      {
+        printf("Socket creation failed.\n");
+        continue;
+      }
+
+      if (setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
+      {
+        perror("setsockopt failed!\n");
+        exit(1);
+      }
+
+      rv = bind(serverSock, (struct sockaddr *)&ipv6Addr, sizeof(ipv6Addr));
+      if (rv == -1)
+      {
+        perror("Bind failed!\n");
+        close(serverSock);
+        continue;
+      }
+      break;
+    }
+
+    if (p == NULL)
+    {
+      fprintf(stderr, "Server failed to create an apporpriate socket.\n");
       exit(1);
     }
 
-    rv = bind(serverSock, p->ai_addr, p->ai_addrlen);
+    printf("[x]Listening on %s:%d \n", Desthost, port);
+
+    rv = listen(serverSock, backLogSize);
     if (rv == -1)
     {
-      perror("Bind failed!\n");
-      close(serverSock);
-      continue;
+      perror("Listen failed!\n");
+      exit(1);
     }
-    break;
+
+    struct sockaddr_in6 client6Addr;
+    socklen_t client_size = sizeof(client6Addr);
+
+    initArray(&clients, 5);
+
+    int clientSock = 0;
+
+    signal(SIGPIPE, SIG_IGN);
+
+    while (1)
+    {
+      clientSock = accept(serverSock, (struct sockaddr *)&client6Addr, &client_size);
+      if (clientSock == -1)
+      {
+        perror("Accept failed!\n");
+      }
+
+      printIp6Addr(servinfo, client6Addr, Desthost);
+
+      clientDetails *currentClient = (clientDetails *)malloc(sizeof(clientDetails));
+      memset(currentClient, 0, sizeof(clientDetails));
+      currentClient->clientSock = clientSock;
+      currentClient->uid = uid++;
+
+      pthread_create(&tid, NULL, &handle_client, (void *)currentClient);
+    }
+  }
+  else
+  {
+    memset(&hint, 0, sizeof(hint));
+    hint.ai_family = AF_UNSPEC;
+    hint.ai_socktype = SOCK_STREAM;
+
+    if ((rv = getaddrinfo(Desthost, Destport, &hint, &servinfo)) != 0)
+    {
+      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+      return 1;
+    }
+    for (p = servinfo; p != NULL; p = p->ai_next)
+    {
+      if ((serverSock = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+      {
+        printf("Socket creation failed.\n");
+        continue;
+      }
+
+      if (setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
+      {
+        perror("setsockopt failed!\n");
+        exit(1);
+      }
+
+      rv = bind(serverSock, p->ai_addr, p->ai_addrlen);
+      if (rv == -1)
+      {
+        perror("Bind failed!\n");
+        close(serverSock);
+        continue;
+      }
+      break;
+    }
+
+    if (p == NULL)
+    {
+      fprintf(stderr, "Server failed to create an apporpriate socket.\n");
+      exit(1);
+    }
+
+    printf("[x]Listening on %s:%d \n", Desthost, port);
+
+    rv = listen(serverSock, backLogSize);
+    if (rv == -1)
+    {
+      perror("Listen failed!\n");
+      exit(1);
+    }
+
+    struct sockaddr_in clientAddr;
+    socklen_t client_size = sizeof(clientAddr);
+
+    initArray(&clients, 5);
+
+    int clientSock = 0;
+
+    signal(SIGPIPE, SIG_IGN);
+
+    while (1)
+    {
+      clientSock = accept(serverSock, (struct sockaddr *)&clientAddr, &client_size);
+      if (clientSock == -1)
+      {
+        perror("Accept failed!\n");
+      }
+
+      printIpAddr(clientAddr);
+
+      clientDetails *currentClient = (clientDetails *)malloc(sizeof(clientDetails));
+      memset(currentClient, 0, sizeof(clientDetails));
+      currentClient->clientSock = clientSock;
+      currentClient->uid = uid++;
+
+      pthread_create(&tid, NULL, &handle_client, (void *)currentClient);
+    }
   }
 
   freeaddrinfo(servinfo);
-
-  if (p == NULL)
-  {
-    fprintf(stderr, "Server failed to create an apporpriate socket.\n");
-    exit(1);
-  }
-
-  printf("[x]Listening on %s:%d \n", Desthost, port);
-
-  rv = listen(serverSock, backLogSize);
-  if (rv == -1)
-  {
-    perror("Listen failed!\n");
-    exit(1);
-  }
-
-  struct sockaddr_in clientAddr;
-  socklen_t client_size = sizeof(clientAddr);
-
-  initArray(&clients, 5);
-
-  int clientSock = 0;
-
-  while (1)
-  {
-    clientSock = accept(serverSock, (struct sockaddr *)&clientAddr, &client_size);
-    if (clientSock == -1)
-    {
-      perror("Accept failed!\n");
-    }
-
-    printIpAddr(clientAddr);
-
-    clientDetails *currentClient = (clientDetails *)malloc(sizeof(clientDetails));
-    memset(currentClient, 0, sizeof(clientDetails));
-    currentClient->address = clientAddr;
-    currentClient->clientSock = clientSock;
-    currentClient->uid = uid++;
-
-    pthread_create(&tid, NULL, &handle_client, (void *)currentClient);
-  }
-
   close(serverSock);
   freeArray(&clients);
   return 0;

@@ -60,37 +60,37 @@ void recv_msg_handler(void *arg)
       }
       if (same == false)
       {
-        //Implementation for allowing the specific type of messages from the perl tests as well as any netcat or similar client messages to function properly!
+        // Implementation for allowing the specific type of messages from the perl tests as well as any netcat or similar client messages to function properly!
         int nrOfNewlines = 0;
         int posOfNewlines[3] = {0, 0, 0};
-        for(int i = 0; i < sizeof(message); i++)
+        for (int i = 0; i < sizeof(message); i++)
         {
-          if(message[i] == '\n')
+          if (message[i] == '\n')
           {
             posOfNewlines[nrOfNewlines] = i;
             nrOfNewlines++;
           }
         }
 
-        for(int i = 0; i < nrOfNewlines; i++)
+        for (int i = 0; i < nrOfNewlines; i++)
         {
-          if(nrOfNewlines == 1 || i == 0)
+          if (nrOfNewlines == 1 || i == 0)
           {
             char messageWithoutMSG[255];
             memset(messageWithoutMSG, 0, 255);
             int spacesFound = 0;
-            for(int i = 0; i < ((int)strlen(message)); i++)
+            for (int i = 0; i < ((int)strlen(message)); i++)
             {
-              if(message[i] == ' ')
+              if (message[i] == ' ')
               {
                 spacesFound++;
-                if(spacesFound == 2)
+                if (spacesFound == 2)
                 {
                   messageWithoutMSG[(int)strlen(messageWithoutMSG)] = ':';
                 }
               }
 
-              if(spacesFound > 0)
+              if (spacesFound > 0)
               {
                 messageWithoutMSG[(int)strlen(messageWithoutMSG)] = message[i];
               }
@@ -106,22 +106,22 @@ void recv_msg_handler(void *arg)
             char temp[255];
             memset(temp, 0, 255);
             memcpy(temp, &message[posOfNewlines[i - 1]], (size_t)(posOfNewlines[i] - posOfNewlines[i - 1] + 1));
-            
+
             char messageWithoutMSG[255];
             memset(messageWithoutMSG, 0, 255);
             int spacesFound = 0;
-            for(int i = 0; i < ((int)strlen(temp)); i++)
+            for (int i = 0; i < ((int)strlen(temp)); i++)
             {
-              if(temp[i] == ' ')
+              if (temp[i] == ' ')
               {
                 spacesFound++;
-                if(spacesFound == 2)
+                if (spacesFound == 2)
                 {
                   messageWithoutMSG[(int)strlen(messageWithoutMSG)] = ':';
                 }
               }
 
-              if(spacesFound > 0)
+              if (spacesFound > 0)
               {
                 messageWithoutMSG[(int)strlen(messageWithoutMSG)] = temp[i];
               }
@@ -132,7 +132,7 @@ void recv_msg_handler(void *arg)
           }
         }
 
-        //Perfectly fine implementation for catching netcat and similar client's messages
+        // Perfectly fine implementation for catching netcat and similar client's messages
 
         /*
         char messageWithoutMSG[255];
@@ -200,15 +200,51 @@ int main(int argc, char *argv[])
     exit(1);
   }
   /*
-    Read first input, assumes <ip>:<port> syntax, convert into one string (Desthost) and one integer (port). 
-     Atm, works only on dotted notation, i.e. IPv4 and DNS. IPv6 does not work if its using ':'. 
+    Read first input, assumes <ip>:<port> syntax, convert into one string (Desthost) and one integer (port).
+     Atm, works only on dotted notation, i.e. IPv4 and DNS. IPv6 does not work if its using ':'.
   */
+
+  int IPv6 = 0;
   char *hoststring, *portstring, *rest, *org;
-  org = strdup(argv[1]);
-  rest = argv[1];
-  hoststring = strtok_r(rest, ":", &rest);
-  portstring = strtok_r(rest, ":", &rest);
-  free(org);
+  if (argv[1][0] == '[')
+  {
+    // IPv6
+    IPv6 = 1;
+    char delim[] = "]";
+    char delim2[] = ":";
+    hoststring = strtok(argv[1], delim);
+    portstring = strtok(NULL, delim2);
+    memmove(hoststring, hoststring + 1, strlen(hoststring));
+    printf("%s, %s\n", hoststring, portstring);
+  }
+  else
+  {
+    org = strdup(argv[1]);
+    rest = argv[1];
+    hoststring = strtok_r(rest, ":", &rest);
+    portstring = strtok_r(rest, ":", &rest);
+    free(org);
+
+    // Parse if DNS to see if it's IPv4 or IPv6
+    struct addrinfo hint, *test;
+    memset(&hint, 0, sizeof(hint));
+    hint.ai_family = AF_UNSPEC;
+    hint.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(hoststring, portstring, &hint, &test) == -1)
+    {
+      printf("Failed to get addr info\n");
+    }
+
+    switch (test->ai_family)
+    {
+    case AF_INET:
+      IPv6 = 0;
+      break;
+    case AF_INET6:
+      IPv6 = 1;
+      break;
+    }
+  }
 
   /* This is to test nicknames */
   char *expression = "^[A-Za-z0-9/_]+$";
@@ -251,29 +287,65 @@ int main(int argc, char *argv[])
   int rv;
   int clientSock;
 
-  memset(&hint, 0, sizeof(hint));
-  hint.ai_family = AF_UNSPEC;
-  hint.ai_socktype = SOCK_STREAM;
+  if (IPv6 == 1)
+  {
+    struct sockaddr_in6 ipv6Addr;
+    memset(&ipv6Addr, 0, sizeof(ipv6Addr));
+    ipv6Addr.sin6_family = AF_INET6;
+    ipv6Addr.sin6_port = htons(port);
+    ipv6Addr.sin6_addr = in6addr_any;
 
-  if ((rv = getaddrinfo(hoststring, portstring, &hint, &servinfo)) != 0)
-  {
-    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-    return 1;
+    memset(&hint, 0, sizeof(hint));
+    hint.ai_family = AF_INET6;
+    hint.ai_socktype = SOCK_STREAM;
+
+    if ((rv = getaddrinfo(hoststring, portstring, &hint, &servinfo)) != 0)
+    {
+      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+      return 1;
+    }
+    for (p = servinfo; p != NULL; p = p->ai_next)
+    {
+      if ((clientSock = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+      {
+        printf("Socket creation failed.\n");
+        continue;
+      }
+      int con = connect(clientSock, (struct sockaddr *)&ipv6Addr, p->ai_addrlen);
+      if (con == -1)
+      {
+        printf("Connection failed!\n");
+        exit(1);
+      }
+      break;
+    }
   }
-  for (p = servinfo; p != NULL; p = p->ai_next)
+  else
   {
-    if ((clientSock = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+    memset(&hint, 0, sizeof(hint));
+    hint.ai_family = AF_UNSPEC;
+    hint.ai_socktype = SOCK_STREAM;
+
+    if ((rv = getaddrinfo(hoststring, portstring, &hint, &servinfo)) != 0)
     {
-      printf("Socket creation failed.\n");
-      continue;
+      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+      return 1;
     }
-    int con = connect(clientSock, p->ai_addr, p->ai_addrlen);
-    if (con == -1)
+    for (p = servinfo; p != NULL; p = p->ai_next)
     {
-      printf("Connection failed!\n");
-      exit(1);
+      if ((clientSock = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+      {
+        printf("Socket creation failed.\n");
+        continue;
+      }
+      int con = connect(clientSock, p->ai_addr, p->ai_addrlen);
+      if (con == -1)
+      {
+        printf("Connection failed!\n");
+        exit(1);
+      }
+      break;
     }
-    break;
   }
 
   if (p == NULL)
